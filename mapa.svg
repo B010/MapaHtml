@@ -1,4 +1,0 @@
-<svg viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg">
-  <rect class="area" data-name="Área 1" x="100" y="100" width="300" height="200" fill="lightblue" stroke="black"></rect>
-  <circle class="area" data-name="Área 2" cx="700" cy="500" r="100" fill="lightgreen" stroke="black"></circle>
-</svg>

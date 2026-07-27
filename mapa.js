@@ -4,12 +4,11 @@
   // Obtém o id do mapa da querystring da URL
   const params = new URLSearchParams(window.location.search)
   const mapaId = params.get("id") || "1" // valor padrão caso não haja id
-  const url = `https://SuperAppXrmh2.controlxrm.com.br/Mapas/${mapaId}`
+  const url = `https://SuperAppXrmh.controlxrm.com.br/Mapas/${mapaId}`
 
   let response
   try {
     response = await fetch(url)
-    console.log(response.data)
     if (!response.ok) throw new Error("Erro ao buscar dados da API")
     window.andares = await response.json()
   } catch (e) {
@@ -24,7 +23,6 @@
     // Sidebar responsiva: abrir/fechar no mobile
     const sidebar = document.getElementById("sidebar")
     const menuBtn = document.getElementById("menuBtn")
-    const btnCloseSideBar = document.getElementById("closeSidebar")
     const menuAndarBtn = document.getElementById("menuPisosBtn")
     const menuRotaBtn = document.getElementById("menuRotaBtn")
 
@@ -68,7 +66,6 @@
     L.control.zoom({ position: "bottomright" }).addTo(map)
     let overlayImg = null
     let areaObjs = [],
-      labelObjs = [],
       polyObjs = {}
     let currentAndarIdx = 0
     let currentGraph = null,
@@ -77,6 +74,7 @@
     let labelMarkers = []
     const LABEL_ZOOM_THRESHOLD = 0
     let routeMarkers = []
+    let routeLine = null
     let categoriaMarkers = []
 
     function desenharAndar(idx) {
@@ -86,54 +84,53 @@
       currentNodes = getUniqueNodes(currentSegmentos)
       currentGraph = buildGraph(currentSegmentos, currentNodes)
       if (overlayImg) map.removeLayer(overlayImg)
+      if (routeLine) {
+        map.removeLayer(routeLine)
+        routeLine = null
+      }
       overlayImg = L.imageOverlay(andar.imagem, andar.bounds).addTo(map)
-      // overlayImg = L.imageOverlay(andar.imagem, andar.bounds).addTo(map);
       areaObjs.forEach((a) => map.removeLayer(a))
-      labelObjs.forEach((l) => map.removeLayer(l))
       Object.values(polyObjs).forEach((p) => map.removeLayer(p))
       areaObjs = []
-      labelObjs = []
       polyObjs = {}
       labelMarkers = []
-      andar.areas.forEach((a, i) => {
-        let area, label
-        area = L.polygon(a.coord, {
+      andar.areas.forEach((a) => {
+        const area = L.polygon(a.coord, {
           color: "transparent",
           weight: 3,
           fillColor: a.cor,
           fillOpacity: 0.5,
         }).addTo(map)
-        if (area) {
-          area.on("click", function () {
-            map.closePopup()
-            areaObjs.forEach((a2) => a2.setStyle({ color: "transparent" }))
-            area.setStyle({ color: "red" })
-            map.setView(a.label, map.getZoom(), { animate: true })
-            L.popup({ className: "custom-popup" })
-              .setLatLng(a.label)
-              .setContent(
-                `
-                              <div class="popup-content">
-                                <img src="${a.icon}" class="popup-icon" alt="Ícone">
-                                <div><b>${a.nome}</b><br>${a.popup || ""}<br>
-                                  <span class="popup-rota" style="color:#0070d1;cursor:pointer;font-weight:bold;">ROTA</span>
-                                </div>
-                              </div>
-                            `
-              )
-              .openOn(map)
-          })
-          areaObjs.push(area)
-        }
-        label = L.marker(a.label, {
-          icon: L.divIcon({
-            className: "label",
-            html: `<b>${a.nome}</b>`,
-            iconSize: [80, 20],
-          }),
-          interactive: false,
+        area.on("click", function () {
+          map.closePopup()
+          areaObjs.forEach((a2) => a2.setStyle({ color: "transparent" }))
+          area.setStyle({ color: "red" })
+          map.setView(a.label, map.getZoom(), { animate: true })
+          L.popup({ className: "custom-popup" })
+            .setLatLng(a.label)
+            .setContent(
+              `
+                <div class="popup-content">
+                  <img src="${a.icon}" class="popup-icon" alt="Ícone">
+                  <div><b>${a.nome}</b><br>${a.popup || ""}<br>
+                    <span class="popup-rota" style="color:#0070d1;cursor:pointer;font-weight:bold;">ROTA</span>
+                  </div>
+                </div>
+              `
+            )
+            .openOn(map)
         })
-        labelMarkers.push(label)
+        areaObjs.push(area)
+        labelMarkers.push(
+          L.marker(a.label, {
+            icon: L.divIcon({
+              className: "label",
+              html: `<b>${a.nome}</b>`,
+              iconSize: [80, 20],
+            }),
+            interactive: false,
+          })
+        )
       })
       andar.segmentos.forEach((seg) => {
         const poly = L.polyline([seg.a, seg.b], {
@@ -163,13 +160,11 @@
     andarSelect.onchange = function () {
       if (overlayImg) map.removeLayer(overlayImg)
       areaObjs.forEach((a) => map.removeLayer(a))
-      labelObjs.forEach((l) => map.removeLayer(l))
       Object.values(polyObjs).forEach((p) => map.removeLayer(p))
       routeMarkers.forEach((m) => map.removeLayer(m))
       routeMarkers = []
       limparMarcadoresCategoria()
       areaObjs = []
-      labelObjs = []
       polyObjs = {}
       desenharAndar(this.value)
     }
@@ -213,16 +208,13 @@
       })
       return nearest
     }
-    function convertImageCoordsToLeaflet(points, imageHeight) {
-      return points.map(([x, y]) => [imageHeight - y, x])
-    }
-    function dijkstra(graph, startKey, endKey, segmentos) {
-      const dist = {},
+    function dijkstra(graph, startKey, endKey) {
+      const distancias = {},
         prev = {},
         visited = new Set(),
         queue = []
-      Object.keys(graph).forEach((k) => (dist[k] = Infinity))
-      dist[startKey] = 0
+      Object.keys(graph).forEach((k) => (distancias[k] = Infinity))
+      distancias[startKey] = 0
       queue.push({ key: startKey, dist: 0 })
       while (queue.length) {
         queue.sort((a, b) => a.dist - b.dist)
@@ -232,9 +224,9 @@
         if (key === endKey) break
         graph[key].forEach(({ to, segId, custo }) => {
           if (visited.has(to)) return
-          const alt = dist[key] + custo
-          if (alt < dist[to]) {
-            dist[to] = alt
+          const alt = distancias[key] + custo
+          if (alt < distancias[to]) {
+            distancias[to] = alt
             prev[to] = { from: key, segId }
             queue.push({ key: to, dist: alt })
           }
@@ -253,18 +245,149 @@
       const end = nearestNode(destino, currentNodes)
       const startKey = nodeKey(start)
       const endKey = nodeKey(end)
-      return dijkstra(currentGraph, startKey, endKey, currentSegmentos)
+      return dijkstra(currentGraph, startKey, endKey)
     }
+    // Converte a lista de segmentos do dijkstra numa sequência contínua de pontos,
+    // orientando cada segmento conforme o ponto anterior.
+    function caminhoParaPontos(caminho) {
+      if (!caminho || !caminho.length) return []
+      const pts = []
+      let atual
+      if (caminho.length === 1) {
+        atual = caminho[0].a
+        pts.push(caminho[0].a, caminho[0].b)
+        return pts
+      }
+      const primeiro = caminho[0],
+        segundo = caminho[1]
+      const tocaSegundo = (p) =>
+        nodeKey(p) === nodeKey(segundo.a) || nodeKey(p) === nodeKey(segundo.b)
+      // o ponto do primeiro segmento que NÃO encosta no segundo é a origem
+      atual = tocaSegundo(primeiro.b) ? primeiro.a : primeiro.b
+      pts.push(atual)
+      caminho.forEach((seg) => {
+        const proximo = nodeKey(seg.a) === nodeKey(atual) ? seg.b : seg.a
+        pts.push(proximo)
+        atual = proximo
+      })
+      return pts
+    }
+
+    // Agrupa sequências de coordenadas quase iguais (trechos que deveriam ser retos)
+    // e substitui todas pela média do grupo, eliminando o "serrilhado".
+    function alinharQuaseRetas(pts, tol) {
+      if (pts.length < 3) return pts.map((p) => [p[0], p[1]])
+      const out = pts.map((p) => [p[0], p[1]])
+      for (const eixo of [0, 1]) {
+        let ini = 0
+        for (let i = 1; i <= out.length; i++) {
+          const dentro = i < out.length && Math.abs(out[i][eixo] - out[ini][eixo]) <= tol
+          if (!dentro) {
+            if (i - ini > 1) {
+              let soma = 0
+              for (let j = ini; j < i; j++) soma += out[j][eixo]
+              const media = soma / (i - ini)
+              for (let j = ini; j < i; j++) out[j][eixo] = media
+            }
+            ini = i
+          }
+        }
+      }
+      return out
+    }
+
+    // Remove pontos redundantes: duplicados e vértices praticamente colineares.
+    function limparPontos(pts, tolArea) {
+      const out = []
+      pts.forEach((p) => {
+        const ult = out[out.length - 1]
+        if (!ult || dist(ult, p) > 1e-9) out.push(p)
+      })
+      if (out.length < 3) return out
+      const res = [out[0]]
+      for (let i = 1; i < out.length - 1; i++) {
+        const a = res[res.length - 1],
+          b = out[i],
+          c = out[i + 1]
+        const area = Math.abs(
+          (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+        )
+        if (area > tolArea) res.push(b)
+      }
+      res.push(out[out.length - 1])
+      return res
+    }
+
+    // Arredonda SOMENTE as esquinas, com raio pequeno e fixo: as retas continuam
+    // retas (nenhum ponto novo no meio delas) e o canto vira uma mini curva.
+    function arredondarCantos(pts, raio) {
+      if (pts.length < 3) return pts
+      const out = [pts[0]]
+      for (let i = 1; i < pts.length - 1; i++) {
+        const a = pts[i - 1],
+          v = pts[i],
+          b = pts[i + 1]
+        const dA = dist(a, v),
+          dB = dist(v, b)
+        if (dA < 1e-9 || dB < 1e-9) continue
+        // nunca passa de 1/3 de cada lado, para não comer o segmento vizinho
+        const r = Math.min(raio, dA / 3, dB / 3)
+        const p1 = [v[0] + ((a[0] - v[0]) / dA) * r, v[1] + ((a[1] - v[1]) / dA) * r]
+        const p2 = [v[0] + ((b[0] - v[0]) / dB) * r, v[1] + ((b[1] - v[1]) / dB) * r]
+        // bezier quadrática curta: p1 -> (controle = esquina) -> p2
+        const passos = 6
+        out.push(p1)
+        for (let t = 1; t < passos; t++) {
+          const u = t / passos,
+            w = 1 - u
+          out.push([
+            w * w * p1[0] + 2 * w * u * v[0] + u * u * p2[0],
+            w * w * p1[1] + 2 * w * u * v[1] + u * u * p2[1],
+          ])
+        }
+        out.push(p2)
+      }
+      out.push(pts[pts.length - 1])
+      return out
+    }
+
+    function suavizarRota(caminho) {
+      let pts = caminhoParaPontos(caminho)
+      if (pts.length < 2) return pts
+      // tolerância proporcional ao tamanho médio dos trechos
+      let soma = 0
+      for (let i = 1; i < pts.length; i++) soma += dist(pts[i - 1], pts[i])
+      const passoMedio = soma / (pts.length - 1)
+      const tol = Math.max(passoMedio * 0.35, 1e-6)
+      pts = alinharQuaseRetas(pts, tol)
+      pts = limparPontos(pts, tol * tol * 0.5)
+      // raio na escala da malha (espaçamento dos nós), não do tamanho da rota:
+      // aumente/diminua RAIO_CANTO para curvas maiores ou mais secas
+      const RAIO_CANTO = passoMedio * 0.5
+      return arredondarCantos(pts, RAIO_CANTO)
+    }
+
     function destacarCaminho(caminho, origem, destino) {
       Object.values(polyObjs).forEach((poly) =>
         poly.setStyle({ color: "#bbb", opacity: 0 })
       )
-      caminho.forEach((seg) => {
-        if (polyObjs[seg.id]) {
-          polyObjs[seg.id].setStyle({ color: "orange", opacity: 1, weight: 6 })
-          polyObjs[seg.id].bringToFront()
-        }
-      })
+      if (routeLine) {
+        map.removeLayer(routeLine)
+        routeLine = null
+      }
+      const pontos = suavizarRota(caminho)
+      if (pontos.length > 1) {
+        routeLine = L.polyline(pontos, {
+          color: "orange",
+          weight: 6,
+          opacity: 1,
+          lineJoin: "round",
+          lineCap: "round",
+          smoothFactor: 0,
+          interactive: false,
+        }).addTo(map)
+        routeLine.bringToFront()
+      }
       routeMarkers.forEach((m) => map.removeLayer(m))
       routeMarkers = []
       const origemIcon = L.icon({
@@ -287,9 +410,7 @@
     }
     const navegarBtn = document.getElementById("navegarBtn")
     let aguardandoTransicaoAndar = false
-    let transicaoDestino = null
     let transicaoDestinoLabel = null
-    let transicaoAreaDestino = null
     let transicaoTransferDestino = null
     let transicaoAndarDestino = null
     let btnCheguei = null
@@ -331,26 +452,13 @@
         const caminho1 = buscarCaminho(areaOrigem.label, transferOrigem.label)
         destacarCaminho(caminho1, areaOrigem.label, transferOrigem.label)
         aguardandoTransicaoAndar = true
-        transicaoDestino = areaDestino
         transicaoDestinoLabel = areaDestino.label
-        transicaoAreaDestino = areaDestino
         transicaoTransferDestino = transferDestino
         transicaoAndarDestino = areaDestino.andar
         if (!btnCheguei) {
           btnCheguei = document.createElement("button")
           btnCheguei.textContent = "Cheguei no andar"
-          btnCheguei.style.position = "fixed"
-          btnCheguei.style.bottom = "30px"
-          btnCheguei.style.right = "30px"
-          btnCheguei.style.zIndex = 3000
-          btnCheguei.style.background = "#0070d1"
-          btnCheguei.style.color = "#fff"
-          btnCheguei.style.fontSize = "18px"
-          btnCheguei.style.padding = "14px 28px"
-          btnCheguei.style.border = "none"
-          btnCheguei.style.borderRadius = "24px"
-          btnCheguei.style.boxShadow = "2px 2px 12px #0002"
-          btnCheguei.style.cursor = "pointer"
+          btnCheguei.className = "btn-cheguei"
           btnCheguei.onclick = function () {
             andarSelect.value = transicaoAndarDestino
             desenharAndar(transicaoAndarDestino)
@@ -482,11 +590,10 @@
       })
       return nearest
     }
-    const bounds = [
+    map.fitBounds([
       [0, 0],
       [1000, 1000],
-    ]
-    map.fitBounds(bounds)
+    ])
     function carregarAndares() {
       andarSelect.innerHTML = ""
       andares.forEach((andar, idx) => {
