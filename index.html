@@ -55,6 +55,31 @@
         align-items: center;
       }
 
+      /* tracejado que "anda" no sentido origem -> destino */
+      .rota-fluxo {
+        animation: rota-fluxo 1.1s linear infinite;
+      }
+
+      @keyframes rota-fluxo {
+        from {
+          stroke-dashoffset: 26;
+        }
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .rota-fluxo {
+          animation: none;
+        }
+      }
+
+      #passosLista .passo-ativo {
+        border-left: 4px solid #0070d1;
+        background: #eaf3fc;
+      }
+
       .btn-cheguei {
         position: fixed;
         bottom: 30px;
@@ -209,6 +234,17 @@
       </div>
 
       <div id="sidebar-content" class="bg-white shadow">
+        <div
+          id="mensagem"
+          class="alert alert-warning py-2 px-3 mb-0 d-none"
+          role="alert"
+        ></div>
+
+        <div id="passos-container" class="mb-3 d-none">
+          <label class="form-label">Sua rota</label>
+          <div id="passosLista" class="list-group"></div>
+        </div>
+
         <div id="areaBuscaList-container" class="mb-3 d-none">
           <label for="areaBuscaSelect" class="form-label"
             >O que você está procurando</label

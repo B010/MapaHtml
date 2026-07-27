@@ -32,7 +32,7 @@
     }
 
     function limparEstilosDasAreas() {
-      areaObjs.forEach((a) => a.setStyle({ color: "transparent", weight: 3 }))
+      areaObjs.forEach((a) => a.setStyle({ color: "transparent", weight: 3, dashArray: null }))
     }
 
     const map = L.map("map", { crs: L.CRS.Simple, minZoom: -5, zoomControl: false })
@@ -73,8 +73,14 @@
       currentSegmentos = null
     let labelMarkers = []
     const LABEL_ZOOM_THRESHOLD = 0
+    // teto de zoom ao enquadrar rota/filtro: evita "colar" na planta quando há
+    // poucas áreas ou elas estão muito próximas
+    const ZOOM_MAX_FOCO = 0
     let routeMarkers = []
     let routeLine = null
+    // Trechos da rota atual: 1 quando é no mesmo andar, 2 quando passa por
+    // elevador/escada. O usuário escolhe qual trecho quer ver.
+    let trechosRota = []
     let categoriaMarkers = []
 
     function desenharAndar(idx) {
@@ -103,8 +109,8 @@
         }).addTo(map)
         area.on("click", function () {
           map.closePopup()
-          areaObjs.forEach((a2) => a2.setStyle({ color: "transparent" }))
-          area.setStyle({ color: "red" })
+          areaObjs.forEach((a2) => a2.setStyle({ color: "transparent", dashArray: null }))
+          area.setStyle({ color: "red", weight: 3, dashArray: null })
           map.setView(a.label, map.getZoom(), { animate: true })
           L.popup({ className: "custom-popup" })
             .setLatLng(a.label)
@@ -142,6 +148,8 @@
         polyObjs[seg.id] = poly
       })
       updateLabelsVisibility()
+      // se a rota atual tem um trecho neste andar, redesenha automaticamente
+      if (trechosRota.length) desenharTrechoDoAndarAtual()
     }
 
     function updateLabelsVisibility() {
@@ -208,7 +216,17 @@
       })
       return nearest
     }
-    function dijkstra(graph, startKey, endKey) {
+    // Grafo de cada andar, construído sob demanda e reaproveitado.
+    const cacheAndares = {}
+    function dadosDoAndar(idx) {
+      if (!cacheAndares[idx]) {
+        const segmentos = andares[idx].segmentos
+        const nodes = getUniqueNodes(segmentos)
+        cacheAndares[idx] = { segmentos, nodes, graph: buildGraph(segmentos, nodes) }
+      }
+      return cacheAndares[idx]
+    }
+    function dijkstra(graph, startKey, endKey, segmentos) {
       const distancias = {},
         prev = {},
         visited = new Set(),
@@ -238,14 +256,22 @@
         path.unshift(prev[u].segId)
         u = prev[u].from
       }
-      return path.map((id) => currentSegmentos.find((s) => s.id === id))
+      const caminho = path.map((id) => segmentos.find((s) => s.id === id))
+      caminho.custo = distancias[endKey]
+      return caminho
     }
-    function buscarCaminho(origem, destino) {
-      const start = nearestNode(origem, currentNodes)
-      const end = nearestNode(destino, currentNodes)
-      const startKey = nodeKey(start)
-      const endKey = nodeKey(end)
-      return dijkstra(currentGraph, startKey, endKey)
+    // Caminho dentro de um andar específico (por padrão, o que está na tela).
+    function buscarCaminho(origem, destino, andarIdx = currentAndarIdx) {
+      const { graph, nodes, segmentos } = dadosDoAndar(andarIdx)
+      const startKey = nodeKey(nearestNode(origem, nodes))
+      const endKey = nodeKey(nearestNode(destino, nodes))
+      return dijkstra(graph, startKey, endKey, segmentos)
+    }
+    // Custo real de caminhada (percorrendo o grafo), não distância em linha reta.
+    function custoCaminhada(origem, destino, andarIdx) {
+      const caminho = buscarCaminho(origem, destino, andarIdx)
+      const custo = caminho.custo
+      return custo === undefined || !isFinite(custo) ? Infinity : custo
     }
     // Converte a lista de segmentos do dijkstra numa sequência contínua de pontos,
     // orientando cada segmento conforme o ponto anterior.
@@ -377,16 +403,24 @@
       }
       const pontos = suavizarRota(caminho)
       if (pontos.length > 1) {
-        routeLine = L.polyline(pontos, {
-          color: "orange",
-          weight: 6,
-          opacity: 1,
-          lineJoin: "round",
-          lineCap: "round",
-          smoothFactor: 0,
-          interactive: false,
-        }).addTo(map)
-        routeLine.bringToFront()
+        const base = { lineJoin: "round", lineCap: "round", smoothFactor: 0, interactive: false }
+        // contorno branco por baixo, para a rota se destacar da planta colorida
+        const contorno = L.polyline(pontos, { ...base, color: "#fff", weight: 11, opacity: 0.9 })
+        const linha = L.polyline(pontos, { ...base, color: "orange", weight: 6, opacity: 1 })
+        // tracejado animado por cima: indica o sentido origem -> destino
+        const fluxo = L.polyline(pontos, {
+          ...base,
+          color: "#fff",
+          weight: 3,
+          opacity: 0.95,
+          dashArray: "10 16",
+          className: "rota-fluxo",
+        })
+        routeLine = L.layerGroup([contorno, linha, fluxo]).addTo(map)
+        contorno.bringToFront()
+        linha.bringToFront()
+        fluxo.bringToFront()
+        map.fitBounds(linha.getBounds(), { padding: [60, 60], maxZoom: ZOOM_MAX_FOCO })
       }
       routeMarkers.forEach((m) => map.removeLayer(m))
       routeMarkers = []
@@ -409,31 +443,104 @@
       }
     }
     const navegarBtn = document.getElementById("navegarBtn")
-    let aguardandoTransicaoAndar = false
-    let transicaoDestinoLabel = null
-    let transicaoTransferDestino = null
-    let transicaoAndarDestino = null
-    let btnCheguei = null
+    const mensagemEl = document.getElementById("mensagem")
+    const passosContainer = document.getElementById("passos-container")
+    const passosLista = document.getElementById("passosLista")
+
+    // Mensagens no próprio sidebar, em vez de alert() (péssimo dentro do WebView).
+    function mostrarMensagem(texto) {
+      mensagemEl.textContent = texto
+      mensagemEl.classList.remove("d-none")
+      openSidebar()
+    }
+    function limparMensagem() {
+      mensagemEl.textContent = ""
+      mensagemEl.classList.add("d-none")
+    }
+
+    function limparTrechos() {
+      trechosRota = []
+      if (routeLine) {
+        map.removeLayer(routeLine)
+        routeLine = null
+      }
+      routeMarkers.forEach((m) => map.removeLayer(m))
+      routeMarkers = []
+      passosLista.innerHTML = ""
+      ocultarContainer(passosContainer)
+    }
+
+    function renderPassos() {
+      passosLista.innerHTML = ""
+      if (trechosRota.length < 2) {
+        ocultarContainer(passosContainer)
+        return
+      }
+      trechosRota.forEach((t, i) => {
+        const item = document.createElement("button")
+        item.type = "button"
+        item.className = "list-group-item list-group-item-action"
+        if (t.andar === currentAndarIdx) item.classList.add("passo-ativo")
+        item.innerHTML = `<strong>${i + 1}.</strong> ${t.titulo}<br><small class="text-muted">${andares[t.andar].nome}</small>`
+        item.onclick = () => irParaTrecho(i)
+        passosLista.appendChild(item)
+      })
+      showContainer(passosContainer)
+    }
+
+    function irParaTrecho(i) {
+      const t = trechosRota[i]
+      if (!t) return
+      if (currentAndarIdx !== t.andar) {
+        andarSelect.value = t.andar
+        desenharAndar(t.andar) // redesenha e já traça o trecho deste andar
+      } else {
+        desenharTrechoDoAndarAtual()
+      }
+    }
+
+    // Chamada ao final de desenharAndar: se a rota atual tem um trecho neste
+    // andar, ele aparece pronto — trocar de andar já mostra a rota certa.
+    function desenharTrechoDoAndarAtual() {
+      const t = trechosRota.find((tr) => tr.andar === currentAndarIdx)
+      if (!t) {
+        renderPassos()
+        return
+      }
+      const caminho = buscarCaminho(t.de, t.para, t.andar)
+      destacarCaminho(caminho, t.de, t.para)
+      renderPassos()
+    }
 
     navegarBtn.onclick = () => {
       limparMarcadoresCategoria()
+      limparMensagem()
 
-      if (aguardandoTransicaoAndar) return
       const origemInput = document.getElementById("origem").value
       const destinoInput = document.getElementById("destino").value
       const areaOrigem = findAreaByInput(origemInput)
       const areaDestino = findAreaByInput(destinoInput)
       if (!areaOrigem || !areaDestino) {
-        alert("Selecione áreas válidas para origem e destino!")
+        limparTrechos()
+        mostrarMensagem("Selecione áreas válidas para origem e destino.")
         return
       }
       if (areaOrigem.andar === areaDestino.andar) {
+        trechosRota = [
+          {
+            andar: areaOrigem.andar,
+            de: areaOrigem.label,
+            para: areaDestino.label,
+            titulo: `${areaOrigem.nome} → ${areaDestino.nome}`,
+          },
+        ]
         if (currentAndarIdx !== areaOrigem.andar) {
           andarSelect.value = areaOrigem.andar
           desenharAndar(areaOrigem.andar)
+        } else {
+          desenharTrechoDoAndarAtual()
         }
-        const caminho = buscarCaminho(areaOrigem.label, areaDestino.label)
-        destacarCaminho(caminho, areaOrigem.label, areaDestino.label)
+        renderPassos()
       } else {
         const transferOrigem =
           findNearestElevadorArea(areaOrigem.andar, areaOrigem.label) ||
@@ -442,40 +549,37 @@
           findNearestElevadorArea(areaDestino.andar, areaDestino.label) ||
           findNearestTransferArea(areaDestino.andar, areaDestino.label)
         if (!transferOrigem || !transferDestino) {
-          alert("Não há elevador ou escada em um dos andares!")
+          limparTrechos()
+          mostrarMensagem("Não há elevador ou escada em um dos andares.")
           return
         }
+        trechosRota = [
+          {
+            andar: areaOrigem.andar,
+            de: areaOrigem.label,
+            para: transferOrigem.label,
+            titulo: `${areaOrigem.nome} → ${transferOrigem.nome}`,
+          },
+          {
+            andar: areaDestino.andar,
+            de: transferDestino.label,
+            para: areaDestino.label,
+            titulo: `${transferDestino.nome} → ${areaDestino.nome}`,
+          },
+        ]
         if (currentAndarIdx !== areaOrigem.andar) {
           andarSelect.value = areaOrigem.andar
           desenharAndar(areaOrigem.andar)
+        } else {
+          desenharTrechoDoAndarAtual()
         }
-        const caminho1 = buscarCaminho(areaOrigem.label, transferOrigem.label)
-        destacarCaminho(caminho1, areaOrigem.label, transferOrigem.label)
-        aguardandoTransicaoAndar = true
-        transicaoDestinoLabel = areaDestino.label
-        transicaoTransferDestino = transferDestino
-        transicaoAndarDestino = areaDestino.andar
-        if (!btnCheguei) {
-          btnCheguei = document.createElement("button")
-          btnCheguei.textContent = "Cheguei no andar"
-          btnCheguei.className = "btn-cheguei"
-          btnCheguei.onclick = function () {
-            andarSelect.value = transicaoAndarDestino
-            desenharAndar(transicaoAndarDestino)
-            const caminho2 = buscarCaminho(
-              transicaoTransferDestino.label,
-              transicaoDestinoLabel
-            )
-            destacarCaminho(
-              caminho2,
-              transicaoTransferDestino.label,
-              transicaoDestinoLabel
-            )
-            aguardandoTransicaoAndar = false
-            btnCheguei.remove()
-          }
-        }
-        document.body.appendChild(btnCheguei)
+        renderPassos()
+      }
+      // rota com troca de andar: mantém os passos à vista para o usuário navegar
+      if (trechosRota.length > 1) {
+        openSidebar()
+        showContainer(passosContainer)
+        return
       }
       if (window.innerWidth <= 600) {
         closeSidebar()
@@ -553,18 +657,22 @@
       const allAreas = getAllAreasWithAndar()
       return allAreas.find((a) => `${a.nome} [${a.andarNome}]` === inputValue)
     }
-    function findNearestTransferArea(andarIdx, fromLabel) {
-      const areas = andares[andarIdx].areas
-      const transferAreas = areas.filter(
-        (a) =>
-          a.categoria &&
-          (a.categoria.toLowerCase() === "escada" ||
-            a.categoria.toLowerCase() === "elevador")
-      )
-      if (transferAreas.length === 0) return null
+    // Escolhe a área mais próxima pelo caminho real; se nenhuma for alcançável
+    // pelo grafo, cai de volta na distância em linha reta.
+    function areaMaisProximaPorCaminho(candidatas, fromLabel, andarIdx) {
+      if (!candidatas.length) return null
       let min = Infinity,
         nearest = null
-      transferAreas.forEach((a) => {
+      candidatas.forEach((a) => {
+        const d = custoCaminhada(fromLabel, a.label, andarIdx)
+        if (d < min) {
+          min = d
+          nearest = a
+        }
+      })
+      if (nearest) return nearest
+      min = Infinity
+      candidatas.forEach((a) => {
         const d = dist(fromLabel, a.label)
         if (d < min) {
           min = d
@@ -573,22 +681,20 @@
       })
       return nearest
     }
+    function findNearestTransferArea(andarIdx, fromLabel) {
+      const transferAreas = andares[andarIdx].areas.filter(
+        (a) =>
+          a.categoria &&
+          (a.categoria.toLowerCase() === "escada" ||
+            a.categoria.toLowerCase() === "elevador")
+      )
+      return areaMaisProximaPorCaminho(transferAreas, fromLabel, andarIdx)
+    }
     function findNearestElevadorArea(andarIdx, fromLabel) {
-      const areas = andares[andarIdx].areas
-      const elevadores = areas.filter(
+      const elevadores = andares[andarIdx].areas.filter(
         (a) => a.categoria && a.categoria.toLowerCase() === "elevador"
       )
-      if (elevadores.length === 0) return null
-      let min = Infinity,
-        nearest = null
-      elevadores.forEach((a) => {
-        const d = dist(fromLabel, a.label)
-        if (d < min) {
-          min = d
-          nearest = a
-        }
-      })
-      return nearest
+      return areaMaisProximaPorCaminho(elevadores, fromLabel, andarIdx)
     }
     map.fitBounds([
       [0, 0],
@@ -652,16 +758,20 @@
           !isNaN(label[0]) &&
           !isNaN(label[1])
         if (cat && areaData.categoria === cat && labelValido) {
-          areaObj.setStyle({ color: "red", weight: 4 })
+          // azul tracejado: resultado de filtro, para não confundir com a
+          // seleção de uma área (que usa contorno vermelho sólido)
+          areaObj.setStyle({ color: "#0d6efd", weight: 3, dashArray: "6 4" })
           bounds.push(label)
         } else {
-          areaObj.setStyle({ color: "transparent", weight: 3 })
+          areaObj.setStyle({ color: "transparent", weight: 3, dashArray: null })
         }
       })
       if (bounds.length === 1) {
-        map.setView(bounds[0], map.getZoom(), { animate: true })
+        // uma única área: mantém o zoom atual, só centraliza
+        map.setView(bounds[0], Math.min(map.getZoom(), ZOOM_MAX_FOCO), { animate: true })
       } else if (bounds.length > 1) {
-        map.fitBounds(bounds, { padding: [40, 40] })
+        // sem maxZoom, poucas áreas próximas jogam o mapa no zoom máximo
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: ZOOM_MAX_FOCO })
       }
       if (!cat) return
       andares[andarComCategoria].areas.forEach((area, idx) => {
