@@ -101,22 +101,26 @@
         routeLine = null;
       }
       overlayImg = L.imageOverlay(andar.imagem, andar.bounds).addTo(map);
+      map.setMaxBounds(andar.bounds);
+      map.fitBounds(andar.bounds);
       areaObjs.forEach((a) => map.removeLayer(a));
       Object.values(polyObjs).forEach((p) => map.removeLayer(p));
       areaObjs = [];
       polyObjs = {};
       labelMarkers = [];
       andar.areas.forEach((a) => {
+        const corArea = a.cor || "#4fa3e3";
         const area = L.polygon(a.coord, {
-          color: "transparent",
-          weight: 3,
-          fillColor: a.cor,
-          fillOpacity: 0.5,
+          color: corArea,
+          weight: 2,
+          fillColor: corArea,
+          fillOpacity: 0.35,
         }).addTo(map);
+        area.corOriginal = corArea;
         area.on("click", function () {
           map.closePopup();
           areaObjs.forEach((a2) =>
-            a2.setStyle({ color: "transparent", dashArray: null }),
+            a2.setStyle({ color: a2.corOriginal, weight: 2, dashArray: null }),
           );
           area.setStyle({ color: "red", weight: 3, dashArray: null });
           map.setView(a.label, map.getZoom(), { animate: true });
@@ -699,9 +703,6 @@
         );
         if (idx >= 0 && areaObjs[idx]) {
           areaObjs[idx].fire("click");
-          map.setView(area.label, Math.max(map.getZoom(), 1), {
-            animate: true,
-          });
         }
       }, 300);
     }
@@ -724,9 +725,6 @@
           );
           if (idx >= 0 && areaObjs[idx]) {
             areaObjs[idx].fire("click");
-            map.setView(area.label, Math.max(map.getZoom(), 1), {
-              animate: true,
-            });
           }
         }, 300);
       });
@@ -773,10 +771,6 @@
       );
       return areaMaisProximaPorCaminho(elevadores, fromLabel, andarIdx);
     }
-    map.fitBounds([
-      [0, 0],
-      [1000, 1000],
-    ]);
     function carregarAndares() {
       andarSelect.innerHTML = "";
       andares.forEach((andar, idx) => {
