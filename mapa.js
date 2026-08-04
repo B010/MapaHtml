@@ -123,7 +123,11 @@
             a2.setStyle({ color: a2.corOriginal, weight: 2, dashArray: null }),
           );
           area.setStyle({ color: "red", weight: 3, dashArray: null });
-          map.setView(a.label, map.getZoom(), { animate: true });
+          map.fitBounds(area.getBounds(), {
+            padding: [60, 60],
+            maxZoom: ZOOM_MAX_FOCO,
+            animate: true,
+          });
           L.popup({ className: "custom-popup" })
             .setLatLng(a.label)
             .setContent(
