@@ -33,7 +33,7 @@
 
     function limparEstilosDasAreas() {
       areaObjs.forEach((a) =>
-        a.setStyle({ color: "transparent", weight: 3, dashArray: null }),
+        a.setStyle({ color: a.corOriginal, weight: 2, dashArray: null }),
       );
     }
 
