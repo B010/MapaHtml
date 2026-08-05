@@ -508,6 +508,8 @@
       mensagemEl.classList.add("d-none");
     }
 
+    const cancelarRotaFloatBtn = document.getElementById("cancelarRotaFloatBtn");
+
     function limparTrechos() {
       trechosRota = [];
       if (routeLine) {
@@ -518,7 +520,35 @@
       routeMarkers = [];
       passosLista.innerHTML = "";
       ocultarContainer(passosContainer);
+      ocultarContainer(cancelarRotaFloatBtn);
     }
+
+    function cancelarRota() {
+      limparTrechos();
+      limparMensagem();
+      limparEstilosDasAreas();
+      map.closePopup();
+
+      const origemInput = document.getElementById("origem");
+      const destinoInput = document.getElementById("destino");
+      origemInput.value = "";
+      destinoInput.value = "";
+
+      ocultarContainer(document.getElementById("origem-container"));
+      ocultarContainer(document.getElementById("destino-container"));
+      ocultarContainer(navegarBtnContainer);
+
+      if (window.innerWidth <= 600) {
+        closeSidebar();
+        showButtons();
+      } else {
+        showContainer(categoriaContainer);
+        showContainer(AreaBuscaContainer);
+      }
+    }
+
+    document.getElementById("cancelarRotaBtn").onclick = cancelarRota;
+    cancelarRotaFloatBtn.onclick = cancelarRota;
 
     function renderPassos() {
       passosLista.innerHTML = "";
@@ -625,6 +655,8 @@
         }
         renderPassos();
       }
+      showContainer(cancelarRotaFloatBtn);
+
       // rota com troca de andar: mantém os passos à vista para o usuário navegar
       if (trechosRota.length > 1) {
         openSidebar();

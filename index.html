@@ -274,7 +274,8 @@
 
       #menuBtn,
       #menuPisosBtn,
-      #menuRotaBtn {
+      #menuRotaBtn,
+      #cancelarRotaFloatBtn {
         display: none;
         position: fixed;
         z-index: 2100;
@@ -321,6 +322,14 @@
         bottom: 152px;
       }
 
+      #cancelarRotaFloatBtn {
+        right: 14px;
+        bottom: 204px;
+        background: #c0392b;
+        font-size: 20px;
+        line-height: 1;
+      }
+
       #closeSidebar {
         display: none;
       }
@@ -349,7 +358,8 @@
         #closeSidebar,
         #menuRotaBtn,
         #menuPisosBtn,
-        #menuBtn {
+        #menuBtn,
+        #cancelarRotaFloatBtn {
           display: flex;
         }
       }
@@ -384,6 +394,13 @@
         alt="Rota"
       />
     </button>
+    <button
+      id="cancelarRotaFloatBtn"
+      class="d-none"
+      title="Cancelar rota"
+    >
+      ✕
+    </button>
 
     <div id="sidebar" class="d-flex flex-column open">
       <div
@@ -402,6 +419,13 @@
         <div id="passos-container" class="mb-3 d-none">
           <label class="form-label">Sua rota</label>
           <div id="passosLista" class="list-group"></div>
+          <button
+            id="cancelarRotaBtn"
+            type="button"
+            class="btn btn-outline-danger btn-sm rounded-pill w-100 mt-2"
+          >
+            Cancelar rota
+          </button>
         </div>
 
         <div id="areaBuscaList-container" class="mb-3 d-none">
